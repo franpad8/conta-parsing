@@ -1,0 +1,23 @@
+$
+[M]<MESSAGE-TYPE \d{3}>
+[S]<BIC-SENDER biccode>
+[R]<BIC-RECEIVER biccode>
+[20]<SEME \w+>
+[28E]<PAGE-NUMBER \d{5}>/<CONTINUATION-INDICATOR \w{4}>
+[97]<ACCOUNT-CODE>
+
+[35B]<ISIN \w{12}>
+[93B]<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}>
+[T]<DATE YYYYMMDD>/<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}>/<REFNOSTRO .+>(/<REFVOSTRO> .+)?
+[T]...
+[T]...
+[93B]<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}> 
+
+[35B]<ISIN \w{12}>
+[93B]<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}>
+[T]<DATE YYYYMMDD>/<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}>/<REFNOSTRO .+>(/<REFVOSTRO .+>)?
+[T]...
+[T]...
+[93B]<QUANTITY-TYPE \a{4}>/<SIGN N>?<QUANTITY \decimal{1,15}> 
+...
+@@
