@@ -15,99 +15,21 @@ _ERROR_DICT = {
         1: "Sintax error in line %s. This field must have the tag \'%s\'."
     },
     2: {
-        0: "Error código T92 en la linea %s. Este campo debe contener el codigo %s.",
-        1: "Error code T92 at line %s. This field must contain the code %s."
+        0: "Error de sintaxis en linea %s. Se esperaba un caracter '$' de inicio de mensaje.",
+        1: "Sintax error in line %s. A message's beginning character '$' was expected."
     },
-
     3: {
-        0: ("Error código T97 en la linea %s."
-            "El Indicador de Continuación debe contener uno de los"
-            "siguientes valores: %s."),
-        1: ("Error code T97 at line %s."
-            "Continuation Indicator must contain one of the"
-            "following codes: %s.")
+        0: "Error de sintaxis en linea %s. El campo '%s' debe contener el siguiente formato '%s'.",
+        1: "Sintax error in line %s. '%s' field must contain the following format '%s'."
     },
-    4: {
-        0: ("Error código T89 en la linea %s. "
-            "El calificador del campo '%s' debe contener uno de los siguientes valores: %s."),
-        1: ("Error code T89 at line %s. "
-            "'%s' Field Qualifier must contain one of the"
-            "following codes: %s.")
-    },
-    5: {
-        0: ("Error en la linea %s."
-            " Código con mal formato."),
-        1: ("Error at line %s."
-            " Bad format code")
-    },
-
-    6: {
-        0: ("Error en la linea %s. "
-            "El subcampo %s, debe contener uno de los siguientes valores:"
-            " %s."),
-        1: ("Error at line %s. "
-            "Subfield \'%s\', must contain one of the following codes:"
-            " %s."),
-    },
-    7: {
-        0: ("Error en la linea %s. "
-            "El campo %s, opción %s,  debe contener el siguiente formato:"
-            " \'%s\'"),
-        1: ("Error at line %s. "
-            "%s field, option %s, must contain the following format:"
-            " \'%s\'"),
-    },
-
-    8: {
-        0: ("Error en la linea %s. "
-            "En el campo \'%s\', el subcampo \'%s\' debe contener el siguiente formato:"
-            " \'%s\'"),
-        1: ("Error at line %s. "
-            "In \'%s\' field, subfield \'%s\' must contain the following format:"
-            " \'%s\'"),
-    },
-
-    9: {
-        0: ("Error en la linea %s. "
-            "En el campo '%s', si el calificador es '%s' y Data Source Scheme no esta presente "
-            "entonces el subcampo '%s' debe contener uno de los siguientes valores: %s."),
-        1: ("Error at line %s. "
-            "In field '%s', If Qualifier is '%s' and Data Source Scheme is not present then "
-            "subfield '%s' must contain one of the following codes: %s.")
-    },
-    10: {
-        0: ("Error en la linea %s. "
-            "Un campo '%s' con calificador igual a '%s' debe estar presente en este mensaje."),
-        1: ("Error code in line %s. "
-            " A '%s' field with Qualifier value '%s' is mandatory in this message.")
-    },
-    11: {
-        0: "Error en la linea %s. Este campo solo acepta las siguientes opciones '%s'.",
-        1: "Error at line %s. This fields only accepts one of the following options '%s'."
-    },
-    12: {
-        0: ("Error de validación del mensaje. El balance inicial y "
-            "final no coincide con las transacciones asociadas al "
-            "Intrumento Financiero de ISIN '%s'."),
-        1: ("Message Validation Error. Initial and final balance "
-            "don't match with the transactions movements of the FIN with ISIN '%s'.")
-    },
-    13: {
-        0: "Error en la linea %s. La cabecera del mensaje no contiene el formato apropiado.",
-        1: "Error at line %s. Message's Header doesn't contain the correct format."
-    },
-    14: {
-        0: "Error en la linea %s. El pie de página del mensaje no contiene el formato apropiado.",
-        1: "Error at line %s. Message's Footer doesn't contain the correct format."
-    }
 }
 
 
 class ParsingError(Exception):
     """ Parsing Exception Handling Class Definition """
-    def __init__(self, code, lang, line, **kargs):
+    def __init__(self, code, lang, line, *args):
         Exception.__init__(self)
-        self.msg = _ERROR_DICT[code][lang]%((line,)+tuple(kargs.values()))
+        self.msg = _ERROR_DICT[code][lang]%((line,)+tuple(args))
 
 ### REGEX ###
 R_BIC = r"[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?"
@@ -135,9 +57,71 @@ class ContaValoresParser():
 
     def parse(self):
         """ Run the parser in the specified file and language """
+
+        # open and read file
         with open(self._path, "r") as file:
-            lines = file.readlines()
-            self._list_result = lines
+            # store lines with its line number in a tuple list, remove \n characters
+            lines = [(i, line.strip()) for i, line in enumerate(file.readlines(), start=1)
+                     if len(line) > 1]
+
+            try:
+                # Read beginning of message symbol ($)
+                num_line, line = lines.pop(0)
+                if line != '$':
+                    raise ParsingError(2, self._language, num_line)
+
+                # Read message type
+                num_line, line = lines.pop(0)
+                mtch = re.match(r'\[M\]\d{3}', line)
+                if mtch:
+                    pass
+                else:
+                    raise ParsingError(3, self._language, num_line, "Message Type",
+                                       r"[M]<number>{3}")
+                    
+                def read_bic(rese):
+                    """ Receiver BIC code """
+                    num_line, line = lines.pop(0)
+                    mtch = re.match(r'\[%s\]%s' % (rese, R_BIC), line)
+                    if mtch:
+                        pass
+                    else:
+                        field_name = "Receiver" if rese == 'R' else 'Sender'
+                        raise ParsingError(3, self._language, num_line, field_name,
+                                           r"[%s]<bic-code>" % rese)
+                read_bic('S')
+                read_bic('R')
+                # SEME
+                num_line, line = lines.pop(0)
+                mtch = re.match(r'\[20\]\w+', line)
+                if mtch:
+                    pass
+                else:
+                    raise ParsingError(3, self._language, num_line, "SEME",
+                                       r"[S]<alphanum>{1,n}")
+
+                # Pagination
+                num_line, line = lines.pop(0)
+                mtch = re.match(r'\[28E\](?P<page>\d{1,5})/(?P<indicator>[A-Z]{4})', line)
+                if mtch:
+                    pass
+                else:
+                    raise ParsingError(3, self._language, num_line, "Pagination",
+                                       r"[28E]<number>{1,5}/<alpha>{4}")
+
+                # Safekeeping Account Code
+                num_line, line = lines.pop(0)
+                mtch = re.match(r'\[97\](\w+)', line)
+                if mtch:
+                    pass
+                else:
+                    raise ParsingError(3, self._language, num_line, "Safekeeping Account Code",
+                                       r"[28E]alphanum{1,n}")
+
+                self._list_result = lines
+
+            except ParsingError as parserror:
+                self._list_result = parserror.msg
 
 
 ### Main ###
@@ -145,4 +129,3 @@ if __name__ == '__main__':
     PARSER = ContaValoresParser("prueba1.txt", 1)
     PARSER.parse()
     PARSER.print_result()
-    
