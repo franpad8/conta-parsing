@@ -28,6 +28,16 @@ _ERROR_DICT = {
         1: ("Sintax error in line %s. 'Quantity Type Code' field must contain one of the "
             "following values: 'AMOR, FAMT or UNIT'.")
     },
+    5: {
+        0: ("Error en linea %s. Se esperaba un valor de tipo %s  en este campo."),
+        1: ("Type error in line %s. A %s value was expected in this field.")
+    },
+    12: {
+        0: ("Error de validación del mensaje. El balance inicial y final no coincide"
+            " con las transacciones asociadas al Intrumento Financiero de ISIN '%s'."),
+        1: ("Message Validation Error. Initial and final balance don't match with the "
+            "transactions movements of the FIN with ISIN '%s'.")
+    },
 }
 
 
@@ -90,9 +100,15 @@ class ContaValoresParser():
             bal_type = mtch.group(1)
             sign = -1 if mtch.group(2) else 1
             if bal_type == 'UNIT':
-                bal = int(mtch.group(3)) * sign
+                try:
+                    bal = int(mtch.group(3)) * sign
+                except ValueError:
+                    raise ParsingError(5, self._language, num_line, "integer")
             elif bal_type in ['FAMT', 'AMOR']:
-                bal = float(mtch.group(3).replace(',', '.')) * sign
+                try:
+                    bal = float(mtch.group(3).replace(',', '.')) * sign
+                except ValueError:
+                    raise ParsingError(5, self._language, num_line, "float")
             else:
                 raise ParsingError(4, self._language, num_line)
             return {'type': bal_type, "bal": bal}
@@ -103,21 +119,29 @@ class ContaValoresParser():
     def _read_trx(self, lines):
         """ Read Transaction's details """
         num_line, line = lines.pop(0)
-        mtch = re.match(r'^\[T\](\d{8})/([A-Z]{4})/(N)?(%s|\d+)/(\w+)(/\w+)?$' % R_DECIMAL, line)
+        pattern = r'^\[T\](\d{8})/(\d{8})/([A-Z]{4})/(N)?(%s|\d+)/(\w+)(/\w+)?$'
+        mtch = re.match(pattern % R_DECIMAL, line)
         if mtch:
-            bal_type = mtch.group(2)
-            sign = -1 if mtch.group(3) else 1
+            bal_type = mtch.group(3)
+            sign = -1 if mtch.group(4) else 1
             if bal_type == 'UNIT':
-                bal = int(mtch.group(4)) * sign
+                try:
+                    bal = int(mtch.group(5)) * sign
+                except ValueError:
+                    raise ParsingError(5, self._language, num_line, "integer")
+
             elif bal_type in ['FAMT', 'AMOR']:
-                bal = float(mtch.group(4).replace(',', '.')) * sign
+                try:
+                    bal = float(mtch.group(5).replace(',', '.')) * sign
+                except ValueError:
+                    raise ParsingError(5, self._language, num_line, "float")
             else:
                 raise ParsingError(4, self._language, num_line)
-            return {'date': mtch.group(1), 'bal_type':  bal_type, 'bal': bal,
-                    'ref_nostro': mtch.group(5)}
+            return {'trade_date': mtch.group(1), 'settlement_date': mtch.group(2),
+                    'bal_type': bal_type, 'bal': bal, 'ref_nostro': mtch.group(6)}
         else:
             raise ParsingError(3, self._language, num_line, "Transaction",
-                               r"[T]<date YYYYMMDD>/<alpha>{4}>/"
+                               r"[T]<date YYYYMMDD>/<date YYYYMMDD>/<alpha>{4}>/"
                                "(N)?<balance>{1,15}/<ref-nostro>(/ref-vostro)?")
 
     def _read_trx_blocks(self, lines):
@@ -130,7 +154,8 @@ class ContaValoresParser():
                 break
         return {'trxs': result}
 
-    def _is_end_of_msg(self, lines):
+    @classmethod
+    def _is_end_of_msg(cls, lines):
         """ Returns True is end-of-message pattern (@@) is found in the current line """
         _, line = lines[0]
         if line == '@@':
@@ -153,6 +178,50 @@ class ContaValoresParser():
                 break
         return result_out
 
+    def _read_safe_account(self, lines):
+        # Safekeeping Account Code
+        num_line, line = lines.pop(0)
+        mtch = re.match(r'\[97\](\w+)', line)
+        if mtch:
+            return mtch.group(1)
+        else:
+            raise ParsingError(3, self._language, num_line, "Safekeeping Account Code",
+                               r"[28E]alphanum{1,n}")
+
+    def _read_message_type(self, lines):
+        # Read message type
+        num_line, line = lines.pop(0)
+        mtch = re.match(r'\[M\](\d{3})', line)
+        if mtch:
+            return mtch.group(1)
+        else:
+            raise ParsingError(3, self._language, num_line, "Message Type",
+                               r"[M]<number>{3}")
+
+    def _read_seme(self, lines):
+        # SEME
+        num_line, line = lines.pop(0)
+        mtch = re.match(r'\[20\](\w+)', line)
+        if mtch:
+            return mtch.group(1)
+        else:
+            raise ParsingError(3, self._language, num_line, "SEME",
+                               r"[S]<alphanum>{1,n}")
+
+
+    def _validate_balances(self, msg):
+        for fin in msg['fins']:
+            sum_trxs = sum([trx['bal'] for trx in fin['trxs']])
+            fiop = fin['fiop']
+            ficl = fin['ficl']
+            try:
+                if ("%.2f" % ficl['bal']) != ("%.2f" % (fiop['bal'] + sum_trxs)):
+                    raise ParsingError(12, self._language, fin['isin'])
+            except TypeError:
+                if ficl['bal'] != fiop['bal'] + sum_trxs:
+                    raise ParsingError(12, self._language, fin['isin'])
+
+
     def parse(self):
         """ Run the parser in the specified file and language """
 
@@ -161,7 +230,7 @@ class ContaValoresParser():
             # store lines with its line number in a tuple list, remove \n characters
             lines = [(i, line.strip()) for i, line in enumerate(file.readlines(), start=1)
                      if len(line) > 1]
-
+            success = True
             try:
                 while lines != []:
                     result = {}
@@ -171,25 +240,10 @@ class ContaValoresParser():
                     if line != '$':
                         raise ParsingError(2, self._language, num_line)
 
-                    # Read message type
-                    num_line, line = lines.pop(0)
-                    mtch = re.match(r'\[M\](\d{3})', line)
-                    if mtch:
-                        result['message_type'] = mtch.group(1)
-                    else:
-                        raise ParsingError(3, self._language, num_line, "Message Type",
-                                           r"[M]<number>{3}")
+                    result['message_type'] = self._read_message_type(lines)
                     result.update(self._read_bic(lines, 'S'))
                     result.update(self._read_bic(lines, 'R'))
-
-                    # SEME
-                    num_line, line = lines.pop(0)
-                    mtch = re.match(r'\[20\](\w+)', line)
-                    if mtch:
-                        result['seme'] = mtch.group(1)
-                    else:
-                        raise ParsingError(3, self._language, num_line, "SEME",
-                                           r"[S]<alphanum>{1,n}")
+                    result['seme'] = self._read_seme(lines)
 
                     # Pagination
                     num_line, line = lines.pop(0)
@@ -201,48 +255,34 @@ class ContaValoresParser():
                         raise ParsingError(3, self._language, num_line, "Pagination",
                                            r"[28E]<number>{1,5}/<alpha>{4}")
 
-                    # Safekeeping Account Code
-                    num_line, line = lines.pop(0)
-                    mtch = re.match(r'\[97\](\w+)', line)
-                    if mtch:
-                        result['safe_account'] = mtch.group(1)
-                    else:
-                        raise ParsingError(3, self._language, num_line, "Safekeeping Account Code",
-                                           r"[28E]alphanum{1,n}")
+                    result['safe_account'] = self._read_safe_account(lines)
 
                     result['fins'] = self._read_blocks_isin(lines)
 
+                    self._validate_balances(result)
+
                     # merging result
-                    if idcr == 'ONLY' or page == 1:
+                    if idcr == 'ONLY' or page == '1':
                         self._list_result.append(result)
                     else:
-                        # Pagination. Search for message with same seme and concatenate trxs 
-                        fins = [msg.fins for msg in self._list_result if msg.seme == result.seme]
-                        for fin in fins:
-                            for c_fin in result.fins:
-                                if fin.isin == c_fin.isin:
-                                    fin.trxs += c_fin.trxs
-                                    break
-                                fin.append(c_fin)
-
-                        
                         for msg in self._list_result:
-                            if msg.seme == result.seme:
-                                for fin in msg.fins:
-                                    if fin.isin = result.fins.
-
-                    
+                            if msg['seme'] == result['seme']:
+                                for r_fin in result['fins']:
+                                    # simplemente se concatena el objeto FIN
+                                    msg['fins'].append(r_fin)
 
             except ParsingError as parserror:
                 self._list_result = parserror.msg
+                success = False
             except IndexError:
                 self._list_result = "Error de sintaxis. Fin inesperado del mensaje."
+                success = False
 
-
+        return (success, self._list_result)
 
 
 ### Main ###
 if __name__ == '__main__':
     PARSER = ContaValoresParser("prueba1.txt", 1)
-    PARSER.parse()
-    PARSER.print_result()
+    print(PARSER.parse())
+    
