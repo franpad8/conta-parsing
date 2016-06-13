@@ -32,6 +32,12 @@ _ERROR_DICT = {
         0: ("Error en linea %s. Se esperaba un valor de tipo %s  en este campo."),
         1: ("Type error in line %s. A %s value was expected in this field.")
     },
+    6: {
+        0: ("Error en la linea %s."
+            "El campo fecha debe contener el siguiente formato YYYYMMDD."),
+        1: ("Error at line %s."
+            "Date Field must contain the format YYYYMMDD.")
+    },
     12: {
         0: ("Error de validación del mensaje. El balance inicial y final no coincide"
             " con las transacciones asociadas al Intrumento Financiero de ISIN '%s'."),
@@ -52,6 +58,13 @@ R_BIC = r"[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?"
 R_DECIMAL = r"\d+,\d*"
 R_UNIT = r"\d+"
 R_DATE = r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"
+R_FCORRECT_DATE = r'\d{4}(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])'
+
+def is_correct_date(date):
+    """ Verify if a given date is format valid """
+    if re.match(R_FCORRECT_DATE, date):
+        return True
+    return False
 
 
 class ContaValoresParser():
@@ -122,6 +135,10 @@ class ContaValoresParser():
         pattern = r'^\[T\](\d{8})/(\d{8})/([A-Z]{4})/(N)?(%s|\d+)/(\w+)(/\w+)?$'
         mtch = re.match(pattern % R_DECIMAL, line)
         if mtch:
+            if not is_correct_date(mtch.group(1)):
+                raise ParsingError(6, self._language, num_line)
+            if not is_correct_date(mtch.group(2)):
+                raise ParsingError(6, self._language, num_line)
             bal_type = mtch.group(3)
             sign = -1 if mtch.group(4) else 1
             if bal_type == 'UNIT':
@@ -285,4 +302,3 @@ class ContaValoresParser():
 if __name__ == '__main__':
     PARSER = ContaValoresParser("prueba1.txt", 1)
     print(PARSER.parse())
-    
