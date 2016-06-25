@@ -38,11 +38,32 @@ _ERROR_DICT = {
         1: ("Error at line %s."
             "Date Field must contain the format YYYYMMDD.")
     },
+   
+    7: {
+        0: ("Error en la linea %s."
+            "Campo Balance con mal formato."),
+        1: ("Error at line %s."
+            "Balance Field with wrong format.")
+    },
+    8: {
+        0: "Error de sintaxis en linea %s. Se esperaba un campo balance con etiqueta [60F] o [60M].",
+        1: "Sintax error in line %s. A Balance Field with tag [60F] or [60M] was expected."
+    },
+    9: {
+        0: "Error de sintaxis en linea %s. Se esperaba un campo balance con etiqueta [62F] o [62M].",
+        1: "Sintax error in line %s. A Balance Field with tag [62F] or [62M] was expected."
+    },
+    11: {
+        0: ("Error de validación del mensaje. El balance inicial de la página '%s' no coincide"
+            " con el balance final de la página anterior."),
+        1: ("Message Validation Error. Initial Balance of page '%s' doesn't match with the "
+            "Final Balance of the previous page.")
+    },
     12: {
         0: ("Error de validación del mensaje. El balance inicial y final no coincide"
-            " con las transacciones asociadas al Intrumento Financiero de ISIN '%s'."),
+            " con las transacciones de la página '%s'."),
         1: ("Message Validation Error. Initial and final balance don't match with the "
-            "transactions movements of the FIN with ISIN '%s'.")
+            "transactions movements of the page '%s'.")
     },
 }
 
@@ -55,10 +76,11 @@ class ParsingError(Exception):
 
 ### REGEX ###
 R_BIC = r"[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?"
-R_DECIMAL = r"\d+,\d*"
+R_DECIMAL = r"\d+,\d{2}"
 R_UNIT = r"\d+"
 R_DATE = r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"
-R_FCORRECT_DATE = r'\d{4}(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])'
+R_FCORRECT_DATE = r'\d{2}(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])'
+R_BALANCE = '^\[(?P<tag>6[02][FM])\](?P<DoC>[DC])(?P<fecha>\d{6})(?P<type>[A-Z]{4})(?P<bal>%s|\d+)$' % R_DECIMAL
 
 def is_correct_date(date):
     """ Verify if a given date is format valid """
@@ -74,7 +96,7 @@ class ContaValoresParser():
         """ Constructor """
         self._language = lang
         self._path = file_path
-        self._list_result = []
+        self._pages = []
 
     def __str__(self):
         lang_aux = "en" if self._language else "es"
@@ -105,69 +127,66 @@ class ContaValoresParser():
             raise ParsingError(3, self._language, num_line, "ISIN",
                                r'[35B]<alphanum>{12}')
 
-    def _read_quantity(self, lines):
+    def _read_balance(self, lines):
         """ Read holding status """
         num_line, line = lines.pop(0)
-        mtch = re.match(r'^\[93B\]([A-Z]{4})/(N)?(%s|\d+)$' % R_DECIMAL, line)
+        mtch = re.match(R_BALANCE, line)
         if mtch:
-            bal_type = mtch.group(1)
-            sign = -1 if mtch.group(2) else 1
+            tag = mtch.group('tag')
+            bal_type = mtch.group('type')
+            sign = -1 if mtch.group('DoC') == 'D' else 1
             if bal_type == 'UNIT':
                 try:
-                    bal = int(mtch.group(3)) * sign
+                    bal = int(mtch.group('bal')) * sign
                 except ValueError:
                     raise ParsingError(5, self._language, num_line, "integer")
             elif bal_type in ['FAMT', 'AMOR']:
                 try:
-                    bal = float(mtch.group(3).replace(',', '.')) * sign
+                    bal = float(mtch.group('bal').replace(',', '.')) * sign
                 except ValueError:
                     raise ParsingError(5, self._language, num_line, "float")
             else:
                 raise ParsingError(4, self._language, num_line)
-            return {'type': bal_type, "bal": bal}
+            return {'type': bal_type, "bal": bal, "tag": tag}
         else:
-            raise ParsingError(3, self._language, num_line, "Balance",
-                               r'[93B]<alpha>{4}>/(N)?<balance>{1,15}')
+            raise ParsingError(7, self._language, num_line)
 
-    def _read_trx(self, lines):
+    def _read_trx(self, lines, bal_type):
         """ Read Transaction's details """
         num_line, line = lines.pop(0)
-        pattern = r'^\[T\](\d{8})/(\d{8})/([A-Z]{4})/(N)?(%s|\d+)/(\w+)(/\w+)?$'
+        pattern = r'^\[61\](?P<fecha>\d{6})(\d{4})?(?P<DoC>[DC])(?P<bal>%s|\d+)(.{4})(?P<refNostro>[^(]+)(\((?P<refVostro>[^(]+)\))?$'
         mtch = re.match(pattern % R_DECIMAL, line)
         if mtch:
-            if not is_correct_date(mtch.group(1)):
+            if not is_correct_date(mtch.group('fecha')):
                 raise ParsingError(6, self._language, num_line)
-            if not is_correct_date(mtch.group(2)):
-                raise ParsingError(6, self._language, num_line)
-            bal_type = mtch.group(3)
-            sign = -1 if mtch.group(4) else 1
+            rede = "RECE" if mtch.group('DoC') == 'C' else 'DELI'
             if bal_type == 'UNIT':
                 try:
-                    bal = int(mtch.group(5)) * sign
+                    bal = int(mtch.group('bal'))
                 except ValueError:
                     raise ParsingError(5, self._language, num_line, "integer")
 
             elif bal_type in ['FAMT', 'AMOR']:
                 try:
-                    bal = float(mtch.group(5).replace(',', '.')) * sign
+                    bal = float(mtch.group('bal').replace(',', '.'))
                 except ValueError:
                     raise ParsingError(5, self._language, num_line, "float")
             else:
                 raise ParsingError(4, self._language, num_line)
-            return {'trade_date': mtch.group(1), 'settlement_date': mtch.group(2),
-                    'bal_type': bal_type, 'bal': bal, 'ref_nostro': mtch.group(6)}
+            return {'fecha_valor': mtch.group('fecha'), 'rede': rede, 'bal': bal,
+                    'ref_nostro': mtch.group('refNostro')}
         else:
             raise ParsingError(3, self._language, num_line, "Transaction",
                                r"[T]<date YYYYMMDD>/<date YYYYMMDD>/<alpha>{4}>/"
                                "(N)?<balance>{1,15}/<ref-nostro>(/ref-vostro)?")
 
-    def _read_trx_blocks(self, lines):
+    def _read_trx_blocks(self, lines, bal_type):
         """ Read block of transactions """
         result = []
         while True:
-            result.append(self._read_trx(lines))
+            result.append(self._read_trx(lines, bal_type))
             line = lines[0][1]
-            if not re.match(r'\[T\]', line):
+            if not re.match(r'\[61\]', line):
                 break
         return {'trxs': result}
 
@@ -195,15 +214,15 @@ class ContaValoresParser():
                 break
         return result_out
 
-    def _read_safe_account(self, lines):
+    def _read_account_code(self, lines):
         # Safekeeping Account Code
         num_line, line = lines.pop(0)
-        mtch = re.match(r'\[97\](\w+)', line)
+        mtch = re.match(r'\[25\](.+)', line)
         if mtch:
             return mtch.group(1)
         else:
-            raise ParsingError(3, self._language, num_line, "Safekeeping Account Code",
-                               r"[28E]alphanum{1,n}")
+            raise ParsingError(3, self._language, num_line, "Account Code",
+                               r"[20]alphanum{1,n}")
 
     def _read_message_type(self, lines):
         # Read message type
@@ -218,7 +237,7 @@ class ContaValoresParser():
     def _read_seme(self, lines):
         # SEME
         num_line, line = lines.pop(0)
-        mtch = re.match(r'\[20\](\w+)', line)
+        mtch = re.match(r'\[20\](.+)', line)
         if mtch:
             return mtch.group(1)
         else:
@@ -226,17 +245,36 @@ class ContaValoresParser():
                                r"[S]<alphanum>{1,n}")
 
 
-    def _validate_balances(self, msg):
-        for fin in msg['fins']:
-            sum_trxs = sum([trx['bal'] for trx in fin['trxs']])
-            fiop = fin['fiop']
-            ficl = fin['ficl']
-            try:
-                if ("%.2f" % ficl['bal']) != ("%.2f" % (fiop['bal'] + sum_trxs)):
-                    raise ParsingError(12, self._language, fin['isin'])
-            except TypeError:
-                if ficl['bal'] != fiop['bal'] + sum_trxs:
-                    raise ParsingError(12, self._language, fin['isin'])
+    def _validate_page(self, page):
+        sum_bal = 0
+        for trx in page['trxs']:
+            bal = trx['bal'] if trx['rede'] == 'RECE' else -trx['bal']
+            sum_bal += bal
+        sum_trxs = sum([trx['bal'] for trx in page['trxs']])
+        fiop = page['balance_ini']['bal']
+        ficl = page['balance_fin']['bal']
+        try:
+            if ("%.2f" % ficl) != ("%.2f" % (fiop + sum_trxs)):
+                raise ParsingError(12, self._language, page['pagina'])
+        except TypeError:
+            if ficl != fiop + sum_trxs:
+                raise ParsingError(12, self._language, page['pagina'])
+
+    def _validate_pages(self):
+        for page in self._pages:
+            if page['pagina'] == '1':
+                ficl_prev = page['balance_fin']
+            else:
+                fiop = page['balance_ini']
+                try:
+                    if ("%.2f" % ficl_prev) != ("%.2f" % fiop):
+                        raise ParsingError(11, self._language, page['pagina'])
+                except TypeError:
+                    if ficl_prev != fiop:
+                        raise ParsingError(11, self._language, page['pagina'])
+                ficl_prev = page['balance_fin']
+
+
 
 
     def parse(self):
@@ -248,57 +286,85 @@ class ContaValoresParser():
             lines = [(i, line.strip()) for i, line in enumerate(file.readlines(), start=1)
                      if len(line) > 1]
             success = True
+            pages = []
             try:
                 while lines != []:
-                    result = {}
-                    idcr, page = 'ONLY', 1
+                    page = {}
                     # Read beginning of message symbol ($)
                     num_line, line = lines.pop(0)
                     if line != '$':
                         raise ParsingError(2, self._language, num_line)
 
-                    result['message_type'] = self._read_message_type(lines)
-                    result.update(self._read_bic(lines, 'S'))
-                    result.update(self._read_bic(lines, 'R'))
-                    result['seme'] = self._read_seme(lines)
+                    page['message_type'] = self._read_message_type(lines)
+                    page.update(self._read_bic(lines, 'S'))
+                    page.update(self._read_bic(lines, 'R'))
+                    page['seme'] = self._read_seme(lines)
+
+                    # Read account number
+                    page['account_code'] = self._read_account_code(lines)
+
+                    # Statement Number 
+                    num_line, line = lines.pop(0)
+                    mtch = re.match(r'\[28C\](?P<code>\d+)', line)
+                    if mtch:
+                        code = mtch.group('code')
+                        page['edo_cuenta_codigo'] = code
+                    else:
+                        raise ParsingError(3, self._language, num_line, "Pagination",
+                                           r"[28E]<number>{1,n}")
 
                     # Pagination
                     num_line, line = lines.pop(0)
-                    mtch = re.match(r'\[28E\](?P<page>\d{1,5})/(?P<indicator>[A-Z]{4})', line)
+                    mtch = re.match(r'^\((?P<page>\d+)\)$', line)
                     if mtch:
-                        idcr = mtch.group('indicator')
-                        page = mtch.group('page')
+                        num_page = mtch.group('page')
+                        page['pagina'] = num_page
                     else:
                         raise ParsingError(3, self._language, num_line, "Pagination",
-                                           r"[28E]<number>{1,5}/<alpha>{4}")
+                                           r"[28E]<number>{1,n}")
 
-                    result['safe_account'] = self._read_safe_account(lines)
-
-                    result['fins'] = self._read_blocks_isin(lines)
-
-                    self._validate_balances(result)
-
-                    # merging result
-                    if idcr == 'ONLY' or page == '1':
-                        self._list_result.append(result)
+                    balance_ini = self._read_balance(lines)
+                    if balance_ini['tag'] == '60F':
+                        page['balance_ini'] = {'bal': balance_ini['bal'],
+                                                     'type': balance_ini['type']}
+                    elif balance_ini['tag'] == '60M':
+                        page['balance_ini'] = {'bal': balance_ini['bal'],
+                                                     'type': balance_ini['type']}
                     else:
-                        for msg in self._list_result:
-                            if msg['seme'] == result['seme']:
-                                for r_fin in result['fins']:
-                                    # simplemente se concatena el objeto FIN
-                                    msg['fins'].append(r_fin)
+                         raise ParsingError(8, self._language, num_line)
+
+                    page.update(self._read_trx_blocks(lines, balance_ini['type']))
+
+                    balance_final = self._read_balance(lines)
+                    if balance_final['tag'] == '62F':
+                        page['balance_fin'] = {'bal': balance_final['bal'],
+                                                     'type': balance_final['type']}
+                    elif balance_final['tag'] == '62M':
+                        page['balance_fin'] = {'bal': balance_final['bal'],
+                                                     'type': balance_final['type']}
+                    else:
+                        raise ParsingError(9, self._language, num_line)
+
+                    if self._is_end_of_msg(lines):
+                        self._validate_page(page)
+                        self._pages.append(page)
+
+
+                self._validate_pages()     
+
 
             except ParsingError as parserror:
-                self._list_result = parserror.msg
+                self._pages = parserror.msg
                 success = False
             except IndexError:
-                self._list_result = "Error de sintaxis. Fin inesperado del mensaje."
+                self._pages = "Error de sintaxis. Fin inesperado del mensaje."
                 success = False
 
-        return (success, self._list_result)
+
+        return (success, self._pages)
 
 
 ### Main ###
 if __name__ == '__main__':
     PARSER = ContaValoresParser("prueba1.txt", 1)
-    print(PARSER.parse())
+    pprint.pprint(PARSER.parse())
